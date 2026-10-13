@@ -1,105 +1,108 @@
-# IoTLab — suivi des pannes et des interventions d'un laboratoire
+# IoTLab — Gestion des interventions de maintenance
 
-Base PostgreSQL qui suit les appareils électroniques d'un laboratoire (ESP32, Arduino, Raspberry Pi…), les techniciens qui les réparent, les interventions et l'historique de leurs changements de statut.
-Projet de groupe de SQL avancé (Bachelor 2, Ycode A2627_4728).
+IoTLab est une base PostgreSQL de suivi des appareils électroniques (Arduino, ESP32, Raspberry Pi), des techniciens, des pannes et des interventions. Le projet applique les notions de SQL avancé en Bachelor 2 : fonctions, procédure, trigger, vues, rôles et index.
 
-| Membre | Contribution principale |
-|---|---|
-| Minna | tables, données, assemblage de `projet.sql`, README |
-| Raïssa | fonction, trigger, procédure et leurs tests |
-| Mariam | vues, rôles, droits, index et mesures |
+**Groupe de 3 :** Minna (tables, données, intégration), Raïssa (fonction, procédure, trigger), Mariam (vues, rôles, index).
 
-## La base
+## 1. Base de données
 
-Quatre tables reliées : `appareils` ← `interventions` → `techniciens`, et `historique` → `interventions`.
+Les quatre tables sont reliées par clés étrangères : `appareils` ← `interventions` → `techniciens`, et `historique` → `interventions`.
 
-| Table | Lignes |
+| Table | Données initiales |
 |---|---:|
 | `appareils` | 100 |
 | `techniciens` | 10 |
-| `interventions` (la plus grosse) | 10 000 |
+| `interventions` | 10 000 |
 | `historique` | 2 857 |
 
-Les données sont générées avec `generate_series`, de façon reproductible (pas de `random()`).
+Les données sont générées avec `generate_series()`. **Preuve :**
 
-## Fonction et procédure
-
-**Ce qu'elles font :** `nombre_interventions_appareil(id)` compte les interventions d'un appareil. `cloturer_intervention(id, compte_rendu)` passe une intervention « en cours » à « terminée » et écrit la ligne d'historique.
-
-**Pourquoi elles sont là :** la clôture est une opération en plusieurs étapes (contrôler le statut, modifier, tracer). En une procédure, elle réussit en entier ou échoue en entier. Elle s'exécute avec les droits de son propriétaire : c'est ce qui permet au technicien de clôturer sans accès direct aux tables.
-
-**La preuve :**
-- `SELECT nombre_interventions_appareil(1);` renvoie 100, comme `SELECT COUNT(*) FROM interventions WHERE id_appareil = 1;`.
-- `CALL cloturer_intervention(3, 'Capteur remplacé');` passe l'intervention 3 à « terminée » et ajoute une ligne `en cours → terminée` dans `historique`.
-- `CALL cloturer_intervention(4, 'Test');` (intervention « en attente ») est refusé : « Seule une intervention en cours peut être clôturée ».
-
-## Trigger
-
-**Ce qu'il fait :** `trg_verifier_cloture` refuse qu'une intervention passe à « terminée » sans compte rendu (vide ou fait uniquement d'espaces), à l'insertion comme à la modification.
-
-**Pourquoi dans la base plutôt que dans l'application :** la règle vaut pour tout le monde : l'interface web, pgAdmin, la procédure, un script. Une règle codée seulement dans l'application se contourne avec une simple requête SQL.
-
-**La preuve :** `CALL cloturer_intervention(3, NULL);` échoue avec « Impossible de terminer une intervention sans compte rendu. », l'intervention reste « en cours » et aucune ligne d'historique n'est écrite. Avec un compte rendu, la même commande réussit.
-
-## Vues
-
-**Ce qu'elles font :**
-
-| Vue | Montre | Cache |
-|---|---|---|
-| `vue_technicien` | les interventions non terminées (appareil, panne, technicien, date, statut) | les interventions terminées, les comptes rendus |
-| `vue_superviseur` | par appareil : total et nombre d'interventions terminées | tout le détail (pannes, techniciens, dates) |
-
-**Pourquoi elles sont là :** chaque métier voit ce dont il a besoin, et les rôles n'ont aucun droit sur les tables : la vue est leur seule porte d'entrée.
-
-**La preuve :** `SELECT COUNT(*) FROM vue_technicien;` renvoie 7 143, comme `SELECT COUNT(*) FROM interventions WHERE statut <> 'terminée';`. `SELECT * FROM vue_superviseur;` renvoie 100 lignes (une par appareil).
-
-## Rôles et droits
-
-**Ce qu'ils font :**
-
-| Rôle-métier | Utilisateur | Peut | Ne peut pas |
-|---|---|---|---|
-| `role_technicien` | `user_technicien` | lire `vue_technicien`, appeler `cloturer_intervention` et `nombre_interventions_appareil` | lire une table ou l'autre vue, modifier directement |
-| `role_superviseur` | `user_superviseur` | lire `vue_superviseur`, appeler `nombre_interventions_appareil` | lire une table ou l'autre vue, modifier quoi que ce soit |
-
-**Pourquoi :** moindre privilège. Les droits sont donnés aux rôles-métiers, jamais aux personnes. Les utilisateurs sont créés sans mot de passe, car le dépôt est public : l'administrateur en définit un en local.
-
-**La preuve :** après `SET ROLE user_technicien;`
-- `SELECT * FROM vue_technicien LIMIT 3;` : autorisé.
-- `SELECT * FROM interventions LIMIT 1;` : `permission denied for table interventions`.
-- `SELECT * FROM vue_superviseur;` : `permission denied for view vue_superviseur`.
-
-Après `SET ROLE user_superviseur;`, `SELECT * FROM vue_superviseur;` est autorisé et `CALL cloturer_intervention(3, 'x');` est refusé (`permission denied for procedure cloturer_intervention`). `RESET ROLE;` revient à l'administrateur.
-
-## Index
-
-**Ce qu'ils font :** `idx_interventions_appareil` accélère la recherche des interventions d'un appareil (et la fonction de comptage). `idx_interventions_date` accélère la recherche par période.
-
-**Pourquoi :** sans index, PostgreSQL lit les 10 000 lignes à chaque recherche. Avec 100 appareils, un appareil ne représente que 1 % des lignes : l'index est sélectif et sert vraiment.
-
-**La preuve :** `EXPLAIN (ANALYZE, BUFFERS)` sur les mêmes requêtes, avant puis après `sql/07_index.sql` (médiane de 9 exécutions, PostgreSQL 16) :
-
-| Requête | Avant | Après | Plan avant → après |
-|---|---:|---:|---|
-| `WHERE id_appareil = 5` | 0,613 ms | 0,174 ms | Seq Scan → Bitmap Index Scan |
-| une semaine de `date_intervention` | 0,671 ms | 0,168 ms | Seq Scan → Bitmap Index Scan |
-
-Les temps varient selon la machine : les relancer avec `tests/tests_index.sql`. La lecture passe de 130 pages à 102 (appareil) et 46 (période).
-
-## Reproduire
-
-`projet.sql` s'exécute en une fois sur une base vide, sans erreur (testé aussi au second passage : les rôles existent déjà, ce qui ne génère que des messages `NOTICE`).
-
-```bash
-psql -U postgres -c "CREATE DATABASE projet"
-psql -U postgres -d projet -f projet.sql
+```sql
+SELECT 'appareils' AS table_nom, COUNT(*) FROM appareils
+UNION ALL SELECT 'techniciens', COUNT(*) FROM techniciens
+UNION ALL SELECT 'interventions', COUNT(*) FROM interventions
+UNION ALL SELECT 'historique', COUNT(*) FROM historique;
 ```
 
-Dans pgAdmin : créer une base vide, ouvrir le Query Tool, charger `projet.sql` et exécuter avec F5.
+## 2. Fonction et procédure
 
-Les scripts de vérification sont dans `tests/`. Les fichiers `sql/` sont les morceaux de `projet.sql`, dans l'ordre : tables, données, fonctions, trigger, vues, rôles, index.
+**Ce qu'elles font :** `nombre_interventions_appareil(id)` compte les interventions d'un appareil ; `cloturer_intervention(id, compte_rendu)` clôture une intervention en cours et enregistre son historique. **Pourquoi :** centraliser le comptage et réaliser la clôture et sa traçabilité dans une seule opération transactionnelle.
 
-## Application web (en complément)
+**Preuves :**
 
-Une interface React + FastAPI permet de parcourir la base. Elle n'est pas nécessaire au projet : voir [`docs/APPLICATION.md`](docs/APPLICATION.md).
+```sql
+SELECT nombre_interventions_appareil(1);
+SELECT COUNT(*) FROM interventions WHERE id_appareil = 1;
+-- Les deux résultats sont identiques (100 sur les données initiales).
+
+-- À tester sur une intervention de démonstration au statut 'en cours' :
+-- CALL cloturer_intervention(<id>, 'Capteur remplacé et testé');
+```
+
+## 3. Trigger
+
+**Ce qu'il fait :** `trg_verifier_cloture` refuse toute intervention `terminée` sans compte rendu non vide. **Pourquoi dans PostgreSQL :** la règle reste obligatoire quel que soit le programme qui modifie la base (application web, pgAdmin ou script).
+
+**Preuve :** sur une intervention de test au statut `en cours`, `CALL cloturer_intervention(<id>, NULL);` est refusé avec le message « Impossible de terminer une intervention sans compte rendu. ». Avec un compte rendu renseigné, la clôture est acceptée.
+
+## 4. Vues
+
+**Ce qu'elles font :** `vue_technicien` présente les interventions non terminées sans compte rendu ; `vue_superviseur` présente le total et le nombre d'interventions terminées par appareil. **Pourquoi :** fournir à chaque métier les informations utiles sans exposer les tables.
+
+**Preuves :**
+
+```sql
+SELECT COUNT(*) FROM vue_technicien;
+SELECT COUNT(*) FROM interventions WHERE statut <> 'terminée';
+-- Résultats identiques : 7 143 sur les données initiales.
+SELECT COUNT(*) FROM vue_superviseur;
+-- 100 lignes : une par appareil.
+```
+
+## 5. Rôles et privilèges
+
+**Ce qu'ils font :** `role_technicien` (utilisateur `user_technicien`) lit sa vue et peut appeler la procédure de clôture ; `role_superviseur` (`user_superviseur`) lit sa vue sans modifier les données. Aucun des deux rôles ne lit directement les tables. **Pourquoi :** appliquer le principe du moindre privilège.
+
+**Preuves** (exécuter séparément dans pgAdmin avec un administrateur ; faire `ROLLBACK;` si une erreur a annulé la transaction) :
+
+```sql
+SET ROLE user_technicien;
+SELECT * FROM vue_technicien LIMIT 3; -- autorisé
+SELECT * FROM interventions LIMIT 1;  -- refusé : permission denied
+RESET ROLE;
+
+SET ROLE user_superviseur;
+SELECT * FROM vue_superviseur LIMIT 3; -- autorisé
+SELECT * FROM vue_technicien LIMIT 1;  -- refusé : permission denied
+RESET ROLE;
+```
+
+Les utilisateurs de démonstration ne disposent pas de mots de passe dans le script public.
+
+## 6. Index et performances
+
+**Ce qu'ils font :** `idx_interventions_appareil` accélère la recherche par appareil ; `idx_interventions_date` accélère celle par période. **Pourquoi :** optimiser les recherches dans les 10 000 interventions.
+
+**Preuve :** mêmes requêtes avec `EXPLAIN (ANALYZE, BUFFERS)` avant et après les index ; mesures relevées sur PostgreSQL 16 (médiane de 9 exécutions).
+
+| Recherche | Avant index | Après index | Plan |
+|---|---:|---:|---|
+| `WHERE id_appareil = 5` | 0,613 ms | 0,174 ms | Seq Scan → Bitmap Index Scan |
+| Une semaine sur `date_intervention` | 0,671 ms | 0,168 ms | Seq Scan → Bitmap Index Scan |
+
+Ces durées varient selon la machine. Reproduire les requêtes avec `tests/tests_index.sql`, avant et après création des index.
+
+## 7. Exécution et vérification
+
+**`projet.sql`** regroupe dans l'ordre demandé : **tables → données → fonctions/procédure → trigger → vues → rôles → index**. Il est destiné à une **base vide** ; ne pas le rejouer dans la base de travail déjà remplie.
+
+```bash
+psql -U postgres -c "CREATE DATABASE iolab_validation"
+psql -U postgres -d iolab_validation -f projet.sql
+```
+
+Dans pgAdmin, on peut aussi créer une base vide, ouvrir `projet.sql` dans le Query Tool et l'exécuter. Les tests complémentaires sont dans `tests/` et les scripts séparés dans `sql/`.
+
+**Application complémentaire :** une interface React + FastAPI permet de consulter et gérer les interventions ; le livrable évalué reste le script SQL et ses preuves.
+
+**Rendu :** dépôt GitHub public, avec `projet.sql` et `README.md` à la racine. Déposer sur Moodle, avant le **16 octobre 2026 à 23 h 59**, un `.txt` contenant le lien du dépôt et les noms complets des trois membres.
