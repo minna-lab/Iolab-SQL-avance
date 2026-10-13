@@ -1,0 +1,2 @@
+# Fins de ligne identiques sur Windows et Linux : évite les faux changements dans Git.
+* text=auto eol=lf
