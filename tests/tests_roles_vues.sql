@@ -1,55 +1,80 @@
--- IoTLab · TESTS · rôles et vues
+-- IoTLab · Tests · vues, rôles et droits
+-- Exécutez un bloc à la fois (sélection, puis F5).
+-- SET LOCAL ROLE ne dure que le temps de la transaction : le ROLLBACK
+-- nous fait redevenir nous-mêmes, même après une erreur.
+-- (Si pgAdmin affiche « transaction is aborted », lancez ROLLBACK; puis le bloc suivant.)
 
 
--- A. Technicien : actions AUTORISÉES
-SET ROLE user_technicien;
+-- 1. Les vues, vues par le propriétaire
+--    Vérification : 7143 = 7143 (interventions non terminées) et 100 = 100 (appareils).
+SELECT (SELECT count(*) FROM vue_technicien)                       AS vue_technicien,
+       (SELECT count(*) FROM interventions WHERE statut <> 'terminée') AS interventions_non_terminees,
+       (SELECT count(*) FROM vue_superviseur)                      AS vue_superviseur,
+       (SELECT count(*) FROM appareils)                            AS appareils;
 
-SELECT * FROM vue_technicien LIMIT 3;
 
-SELECT nombre_interventions_appareil(1);
-
+-- 2. Technicien : ce qui est AUTORISÉ
+--    Vérification : trois lignes, puis 100, puis la clôture passe (puis est annulée).
 BEGIN;
+SET LOCAL ROLE user_technicien;
+SELECT * FROM vue_technicien LIMIT 3;
+SELECT nombre_interventions_appareil(1);
 CALL cloturer_intervention(3, 'Capteur remplace, essais valides');
 ROLLBACK;
 
-RESET ROLE;
+
+-- 3. Technicien : lire une table
+--    Vérification : ERROR  permission denied for table interventions
+BEGIN;
+SET LOCAL ROLE user_technicien;
+SELECT * FROM interventions LIMIT 3;
+ROLLBACK;
 
 
--- B. Technicien : actions REFUSÉES (une seule à la fois)
---    Attendu : « permission denied »
-
--- SET ROLE user_technicien;
--- SELECT * FROM interventions LIMIT 3;              -- table interdite
--- RESET ROLE;
-
--- SET ROLE user_technicien;
--- SELECT * FROM vue_superviseur LIMIT 3;            -- vue de l'autre rôle
--- RESET ROLE;
-
--- SET ROLE user_technicien;
--- UPDATE interventions SET statut = 'terminée';     -- modification directe
--- RESET ROLE;
+-- 4. Technicien : lire la vue de l'autre rôle
+--    Vérification : ERROR  permission denied for view vue_superviseur
+BEGIN;
+SET LOCAL ROLE user_technicien;
+SELECT * FROM vue_superviseur LIMIT 3;
+ROLLBACK;
 
 
--- C. Superviseur : actions AUTORISÉES
-SET ROLE user_superviseur;
+-- 5. Technicien : modifier une table directement
+--    Vérification : ERROR  permission denied for table interventions
+BEGIN;
+SET LOCAL ROLE user_technicien;
+UPDATE interventions SET statut = 'terminée';
+ROLLBACK;
 
+
+-- 6. Superviseur : ce qui est AUTORISÉ
+--    Vérification : trois lignes, puis 100.
+BEGIN;
+SET LOCAL ROLE user_superviseur;
 SELECT * FROM vue_superviseur ORDER BY id_appareil LIMIT 3;
+SELECT nombre_interventions_appareil(1);
+ROLLBACK;
 
-RESET ROLE;
+
+-- 7. Superviseur : lire une table
+--    Vérification : ERROR  permission denied for table interventions
+BEGIN;
+SET LOCAL ROLE user_superviseur;
+SELECT * FROM interventions LIMIT 3;
+ROLLBACK;
 
 
--- D. Superviseur : actions REFUSÉES (une seule à la fois)
---    Attendu : « permission denied »
+-- 8. Superviseur : lire la vue de l'autre rôle
+--    Vérification : ERROR  permission denied for view vue_technicien
+BEGIN;
+SET LOCAL ROLE user_superviseur;
+SELECT * FROM vue_technicien LIMIT 3;
+ROLLBACK;
 
--- SET ROLE user_superviseur;
--- SELECT * FROM interventions LIMIT 3;              -- table interdite
--- RESET ROLE;
 
--- SET ROLE user_superviseur;
--- SELECT * FROM vue_technicien LIMIT 3;             -- vue de l'autre rôle
--- RESET ROLE;
-
--- SET ROLE user_superviseur;
--- CALL cloturer_intervention(3, 'Test');            -- il contrôle, il ne modifie pas
--- RESET ROLE;
+-- 9. Superviseur : clôturer une intervention (il contrôle, il ne modifie pas)
+--    Vérification : ERROR  permission denied for procedure cloturer_intervention
+BEGIN;
+SET LOCAL ROLE user_superviseur;
+CALL cloturer_intervention(3, 'Test');
+ROLLBACK;
