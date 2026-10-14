@@ -1,50 +1,47 @@
--- IoTLab · 01 · TABLES
+-- IoTLab · 01 · Tables
+-- On crée d'abord les tables qu'on référence, puis celles qui pointent vers elles.
 
-CREATE TABLE IF NOT EXISTS appareils (
-    id_appareil   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    nom           VARCHAR(100) NOT NULL UNIQUE,
-    type_appareil VARCHAR(50)  NOT NULL,
-    localisation  VARCHAR(100) NOT NULL,
-    etat          VARCHAR(20)  NOT NULL DEFAULT 'fonctionnel',
+CREATE TABLE appareils (
+    id_appareil   integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    nom           varchar(100) NOT NULL UNIQUE,
+    type_appareil varchar(50)  NOT NULL,
+    localisation  varchar(100) NOT NULL,
+    etat          varchar(20)  NOT NULL DEFAULT 'fonctionnel',
 
     CONSTRAINT chk_etat_appareil
         CHECK (etat IN ('fonctionnel', 'en panne', 'en maintenance'))
 );
 
-CREATE TABLE IF NOT EXISTS techniciens (
-    id_technicien INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    nom           VARCHAR(100) NOT NULL,
-    prenom        VARCHAR(100) NOT NULL,
-    specialite    VARCHAR(100) NOT NULL
+CREATE TABLE techniciens (
+    id_technicien integer GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    nom           varchar(100) NOT NULL,
+    prenom        varchar(100) NOT NULL,
+    specialite    varchar(100) NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS interventions (
-    id_intervention   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    id_appareil       INTEGER      NOT NULL,
-    id_technicien     INTEGER      NOT NULL,
-    description_panne TEXT         NOT NULL,
-    date_intervention TIMESTAMP    NOT NULL,
-    statut            VARCHAR(20)  NOT NULL DEFAULT 'en attente',
-    compte_rendu      TEXT,
+-- La table centrale : une intervention = un appareil + un technicien.
+CREATE TABLE interventions (
+    id_intervention   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id_appareil       integer     NOT NULL REFERENCES appareils (id_appareil),
+    id_technicien     integer     NOT NULL REFERENCES techniciens (id_technicien),
+    description_panne text        NOT NULL,
+    date_intervention timestamp   NOT NULL,
+    statut            varchar(20) NOT NULL DEFAULT 'en attente',
+    compte_rendu      text,
 
-    CONSTRAINT fk_intervention_appareil
-        FOREIGN KEY (id_appareil)   REFERENCES appareils (id_appareil),
-    CONSTRAINT fk_intervention_technicien
-        FOREIGN KEY (id_technicien) REFERENCES techniciens (id_technicien),
     CONSTRAINT chk_statut_intervention
         CHECK (statut IN ('en attente', 'en cours', 'terminée'))
 );
 
-CREATE TABLE IF NOT EXISTS historique (
-    id_historique   BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    id_intervention BIGINT      NOT NULL,
-    ancien_statut   VARCHAR(20) NOT NULL,
-    nouveau_statut  VARCHAR(20) NOT NULL,
-    date_changement TIMESTAMP   NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    commentaire     TEXT,
+-- Une ligne par changement de statut d'une intervention.
+CREATE TABLE historique (
+    id_historique   bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    id_intervention bigint      NOT NULL REFERENCES interventions (id_intervention),
+    ancien_statut   varchar(20) NOT NULL,
+    nouveau_statut  varchar(20) NOT NULL,
+    date_changement timestamp   NOT NULL DEFAULT now(),
+    commentaire     text,
 
-    CONSTRAINT fk_historique_intervention
-        FOREIGN KEY (id_intervention) REFERENCES interventions (id_intervention),
     CONSTRAINT chk_historique_ancien
         CHECK (ancien_statut  IN ('en attente', 'en cours', 'terminée')),
     CONSTRAINT chk_historique_nouveau
