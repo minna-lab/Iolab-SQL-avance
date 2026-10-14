@@ -1,0 +1,9 @@
+# Secrets et configuration locale
+.env
+
+# Dépendances et fichiers générés
+node_modules/
+dist/
+.venv/
+__pycache__/
+*.pyc
