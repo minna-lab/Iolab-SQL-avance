@@ -1,55 +1,52 @@
--- IoTLab · 03 · FONCTIONS ET PROCÉDURE
+-- IoTLab · 03 · Fonctions et procédure
 
-CREATE OR REPLACE FUNCTION nombre_interventions_appareil(p_id_appareil INTEGER)
-RETURNS BIGINT
-LANGUAGE SQL
+-- 1. Une fonction : combien d'interventions pour un appareil ?
+--    SECURITY DEFINER : elle lit la table avec les droits de son propriétaire.
+--    Un rôle sans accès aux tables peut donc quand même l'appeler.
+CREATE OR REPLACE FUNCTION nombre_interventions_appareil(p_id_appareil int)
+RETURNS bigint
+LANGUAGE sql
 SECURITY DEFINER
 SET search_path = public
 AS $$
-    SELECT COUNT(*)
+    SELECT count(*)
     FROM interventions
     WHERE id_appareil = p_id_appareil;
 $$;
 
 
--- 2) Refuse la clôture d'une intervention sans compte rendu.
---    Cette fonction n'a de sens que branchée sur le trigger (fichier 04).
+-- 2. La fonction du trigger (il est créé dans 04_trigger.sql).
+--    NEW est la ligne qui arrive : on refuse un statut « terminée » sans compte rendu.
 CREATE OR REPLACE FUNCTION verifier_cloture_intervention()
-RETURNS TRIGGER
+RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
     IF NEW.statut = 'terminée'
-       AND NULLIF(BTRIM(NEW.compte_rendu), '') IS NULL
-    THEN
-        RAISE EXCEPTION
-            'Impossible de terminer une intervention sans compte rendu.';
+       AND (NEW.compte_rendu IS NULL OR btrim(NEW.compte_rendu) = '') THEN
+        RAISE EXCEPTION 'Impossible de terminer une intervention sans compte rendu.';
     END IF;
-
     RETURN NEW;
 END;
 $$;
 
 
--- 3) Clôture une intervention « en cours » et trace le changement.
---    SECURITY DEFINER : la procédure s'exécute avec les droits de son
---    propriétaire. Le technicien peut donc clôturer une intervention
---    sans avoir le moindre droit direct sur les tables.
---    Si le compte rendu est vide, c'est le trigger qui refuse :
---    tout est annulé, y compris la ligne d'historique.
+-- 3. Une procédure : clôturer une intervention « en cours » et garder une trace.
+--    Si le compte rendu est vide, le trigger refuse et tout est annulé,
+--    y compris la ligne d'historique.
 CREATE OR REPLACE PROCEDURE cloturer_intervention(
-    p_id_intervention BIGINT,
-    p_compte_rendu    TEXT
+    p_id_intervention bigint,
+    p_compte_rendu    text
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-    v_ancien_statut VARCHAR(20);
+    v_statut varchar(20);
 BEGIN
-    SELECT statut
-    INTO v_ancien_statut
+    -- FOR UPDATE verrouille la ligne pendant qu'on la lit
+    SELECT statut INTO v_statut
     FROM interventions
     WHERE id_intervention = p_id_intervention
     FOR UPDATE;
@@ -58,22 +55,17 @@ BEGIN
         RAISE EXCEPTION 'Intervention % introuvable.', p_id_intervention;
     END IF;
 
-    IF v_ancien_statut <> 'en cours' THEN
+    IF v_statut <> 'en cours' THEN
         RAISE EXCEPTION
             'Seule une intervention en cours peut être clôturée (statut actuel : %).',
-            v_ancien_statut;
+            v_statut;
     END IF;
 
     UPDATE interventions
-    SET statut       = 'terminée',
-        compte_rendu = p_compte_rendu
+    SET statut = 'terminée', compte_rendu = p_compte_rendu
     WHERE id_intervention = p_id_intervention;
 
-    INSERT INTO historique (
-        id_intervention, ancien_statut, nouveau_statut, commentaire
-    )
-    VALUES (
-        p_id_intervention, v_ancien_statut, 'terminée', p_compte_rendu
-    );
+    INSERT INTO historique (id_intervention, ancien_statut, nouveau_statut, commentaire)
+    VALUES (p_id_intervention, v_statut, 'terminée', p_compte_rendu);
 END;
 $$;
