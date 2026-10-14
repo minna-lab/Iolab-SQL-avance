@@ -1,7 +1,6 @@
--- IoTLab · 04 · TRIGGER
--- Règle : une intervention ne peut pas passer à « terminée »
--- sans compte rendu (vide ou fait uniquement d'espaces).
-
+-- IoTLab · 04 · Trigger
+-- Règle : pas de clôture sans compte rendu, quel que soit le canal
+-- (application, pgAdmin, script). La fonction est dans 03_fonctions.sql.
 
 DROP TRIGGER IF EXISTS trg_verifier_cloture ON interventions;
 
